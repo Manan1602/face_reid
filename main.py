@@ -75,7 +75,7 @@ def setup_logging(level: str) -> None:
     )
 
 
-def build_targets(detector, recognizer, params: argparse.Namespace) -> List[Tuple[np.ndarray, str]]:
+def build_targets(detector, recognizer, faces_dir) -> List[Tuple[np.ndarray, str]]:
     """
     Build targets using face detection and recognition.
 
@@ -88,9 +88,9 @@ def build_targets(detector, recognizer, params: argparse.Namespace) -> List[Tupl
         List[Tuple[np.ndarray, str]]: A list of tuples containing feature vectors and corresponding image names.
     """
     targets = []
-    for filename in os.listdir(params.faces_dir):
+    for filename in os.listdir(faces_dir):
         name = filename[:-4]
-        image_path = os.path.join(params.faces_dir, filename)
+        image_path = os.path.join(faces_dir, filename)
 
         image = cv2.imread(image_path)
         bboxes, kpss = detector.detect(image, max_num=1)
@@ -107,27 +107,34 @@ def build_targets(detector, recognizer, params: argparse.Namespace) -> List[Tupl
 
 def frame_processor(
     frame: np.ndarray,
-    detector: SCRFD,
-    recognizer: ArcFace,
-    targets: List[Tuple[np.ndarray, str]],
-    colors: dict,
-    params: argparse.Namespace
+    faces_dir: str = 'face_reid/faces'
 ) -> np.ndarray:
     """
     Process a video frame for face detection and recognition.
 
     Args:
         frame (np.ndarray): The video frame.
-        detector (SCRFD): Face detector model.
-        recognizer (ArcFace): Face recognizer model.
-        targets (List[Tuple[np.ndarray, str]]): List of target feature vectors and names.
-        colors (dict): Dictionary of colors for drawing bounding boxes.
-        params (argparse.Namespace): Command line arguments.
-
+        faces_dir (str): faces directory
     Returns:
         np.ndarray: The processed video frame.
     """
-    bboxes, kpss = detector.detect(frame, params.max_num)
+    max_num = 5
+    det_weight = 'face_reid/weights/det_2.5g.onnx'
+    
+    # similarity_thresh = 0.6
+    similarity_thresh = 0.3
+    confidence_thresh = 0.5
+    rec_weight = 'face_reid/weights/w600k_r50.onnx'
+
+    detector = SCRFD(det_weight, input_size=(640, 640), conf_thres=confidence_thresh)
+    recognizer = ArcFace(rec_weight)
+
+    targets = build_targets(detector, recognizer, faces_dir)
+    colors = {name: (random.randint(0, 256), random.randint(0, 256), random.randint(0, 256)) for _, name in targets}
+
+    bboxes, kpss = detector.detect(frame, max_num)
+
+    found = False
 
     for bbox, kps in zip(bboxes, kpss):
         *bbox, conf_score = bbox.astype(np.int32)
@@ -137,7 +144,7 @@ def frame_processor(
         best_match_name = "Unknown"
         for target, name in targets:
             similarity = compute_similarity(target, embedding)
-            if similarity > max_similarity and similarity > params.similarity_thresh:
+            if similarity > max_similarity and similarity > similarity_thresh:
                 max_similarity = similarity
                 best_match_name = name
 
@@ -150,16 +157,20 @@ def frame_processor(
     return frame
 
 
-def main(params):
-    setup_logging(params.log_level)
+def main():
+    det_weight = 'weights/det_2.5g.onnx'
+    confidence_thresh = 0.7
+    rec_weight = 'weights/w600k_r50.onnx'
+    faces_dir = 'faces'
+    source = 0
 
-    detector = SCRFD(params.det_weight, input_size=(640, 640), conf_thres=params.confidence_thresh)
-    recognizer = ArcFace(params.rec_weight)
+    detector = SCRFD(det_weight, input_size=(640, 640), conf_thres=confidence_thresh)
+    recognizer = ArcFace(rec_weight)
 
-    targets = build_targets(detector, recognizer, params)
+    targets = build_targets(detector, recognizer, faces_dir)
     colors = {name: (random.randint(0, 256), random.randint(0, 256), random.randint(0, 256)) for _, name in targets}
 
-    cap = cv2.VideoCapture(params.source)
+    cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         raise Exception("Could not open video or webcam")
 
@@ -174,7 +185,7 @@ def main(params):
         if not ret:
             break
 
-        frame = frame_processor(frame, detector, recognizer, targets, colors, params)
+        frame = frame_processor(frame)
         out.write(frame)
         cv2.imshow("Frame", frame)
 
@@ -187,7 +198,4 @@ def main(params):
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    if args.source.isdigit():
-        args.source = int(args.source)
-    main(args)
+    main()
